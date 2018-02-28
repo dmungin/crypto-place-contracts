@@ -1,4 +1,4 @@
-var CryptoPlaceMarket = artifacts.require("./CryptoPlaceMarket.sol");
+var CryptoPlaceMarket = artifacts.require("CryptoPlaceMarket");
 
 module.exports = function(deployer) {
   deployer.deploy(CryptoPlaceMarket);
