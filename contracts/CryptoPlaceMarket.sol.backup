@@ -31,9 +31,9 @@ contract CryptoPlaceMarket {
     }
     ColorChoice public constant INITIAL_PIXEL_COLOR = ColorChoice.xffffff; 
     bool public pixelsInitialized = false;
+    //uint public pixelsRemainingToAssign = 0;
 
     struct Pixel {
-        uint256 location;
         uint256 cost;
         ColorChoice color;
     }
@@ -41,11 +41,10 @@ contract CryptoPlaceMarket {
     mapping (uint256 => address) public ownerOf;
     // Mapping with the pixel balance of each address
     mapping (address => uint256) public balanceOf;
-    
-    // Unordered Array of all owned pixels
+    // Mapping of a pixel index to its owner, cost to purchase, and current color
+    //mapping (uint => Pixel) public pixelInfo;
+    // TODO:: This is too expensive. Need to store these as String? byte array? I have 16 colors so I could use hex 0-f
     Pixel[] public pixels;
-    // Mapping of a pixel location to it's index in the pixel array
-    mapping (uint256 => uint256) public pixelLocationToIndex;
     // Mapping of an address to a pending balance of wei for withdrawal
     mapping (address => uint) public pendingWithdrawals;
     // Assign for first time pixel assignment.
@@ -70,7 +69,7 @@ contract CryptoPlaceMarket {
         require(pixelsInitialized == true);
         _;
     }
-    modifier validLocation(uint256 pixelIndex) {
+    modifier validIndex(uint256 pixelIndex) {
         require(pixelIndex < TOTAL_PIXELS);
         _;
     }
@@ -88,18 +87,25 @@ contract CryptoPlaceMarket {
         name = "CRYPTOPLACE";
         symbol = "₽";
         decimals = 0;
-        // Set 0 index pixel to pad out other pixel indexes. This is so we know if the locations => index is set or not
-        // If the mapping returns an index of 0 we know it isn't set since there is no real pixel set at 0
-        pixels.push(Pixel(0, 0, ColorChoice.xffffff));
     }
-    function setInitialOwner(address to, uint pixelLocation) public onlyOwner preInit validLocation(pixelLocation) {
-        if (ownerOf[pixelLocation] != to) {
-            if (ownerOf[pixelLocation] != address(0)) {
-                balanceOf[ownerOf[pixelLocation]]--;
+    function getPixelsLength() public view returns(uint256) {
+        return pixels.length;
+    }
+    function pushAPixel() public onlyOwner preInit {
+        pixels.push(Pixel(INITIAL_PIXEL_PRICE, ColorChoice.xffffff));
+    }
+    function setSomePixels() public onlyOwner preInit {
+        pixels[0] = Pixel(INITIAL_PIXEL_PRICE, ColorChoice.xffffff);
+        pixels[10] = Pixel(INITIAL_PIXEL_PRICE, ColorChoice.xffffff);
+    }
+    function setInitialOwner(address to, uint pixelIndex) public onlyOwner preInit validIndex(pixelIndex) {
+        if (ownerOf[pixelIndex] != to) {
+            if (ownerOf[pixelIndex] != address(0)) {
+                balanceOf[ownerOf[pixelIndex]]--;
             }
-            ownerOf[pixelLocation] = to;
+            ownerOf[pixelIndex] = to;
             balanceOf[to]++;
-            Assign(to, pixelLocation);
+            Assign(to, pixelIndex);
         }
     }
 
@@ -114,24 +120,21 @@ contract CryptoPlaceMarket {
         pixelsInitialized = true;
     }
     /* Transfer ownership of a pixel to another user without requiring payment */
-    function transfer(address to, uint pixelLocation) public postInit validLocation(pixelLocation) sellerOnly(pixelLocation) {
+    function transfer(address to, uint pixelIndex) public postInit validIndex(pixelIndex) sellerOnly(pixelIndex) {
         require(to != address(0));
-        ownerOf[pixelLocation] = to;
+        ownerOf[pixelIndex] = to;
         balanceOf[msg.sender]--;
         balanceOf[to]++;
-        Transfer(msg.sender, to, pixelLocation);
+        Transfer(msg.sender, to, pixelIndex);
     }
     /* Buy one or more pixels and set the color of the pixels */
-    function buyPixels(uint256[] pixelLocations, uint8[] colorIndicies) public payable postInit {
+    function buyPixels(uint256[] pixelIndicies, uint8[] colorIndicies) public payable postInit {
         uint256 totalCost = 0;
         // Totals cost of all pixels and confirm pixel locations and colors are valid
-        for (uint256 x = 0; x < pixelLocations.length; x++) {
-            uint256 pixelLocation = pixelLocations[x];
-            require(pixelLocation < TOTAL_PIXELS);
+        for (uint256 x = 0; x < pixelIndicies.length; x++) {
+            require(pixelIndicies[x] < TOTAL_PIXELS);
             require(uint8(ColorChoice.x820080) >= colorIndicies[x]);
-            // Get array index of pixel if it has previously been set. If not it will return 0
-            uint256 pixelIndex = pixelLocationToIndex[pixelLocation];
-            totalCost += (pixelIndex > 0) ? pixels[pixelIndex].cost : INITIAL_PIXEL_PRICE;
+            totalCost += pixels[pixelIndicies[x]].cost;
         }
         require(totalCost <= msg.value);
         // Refund any excess sent to senders widthrawals
@@ -139,72 +142,60 @@ contract CryptoPlaceMarket {
             pendingWithdrawals[msg.sender] += (msg.value - totalCost);
         }
         // Buy each pixel
-        for (x = 0; x < pixelLocations.length; x++) {
-            buyPixel(pixelLocations[x], colorIndicies[x]);
+        for (x = 0; x < pixelIndicies.length; x++) {
+            buyPixel(pixelIndicies[x], colorIndicies[x]);
         }
     }
     /* Finalize purchase by transferring ownership then updating pixel and withrawal balances */
-    function buyPixel(uint256 pixelLocation, uint8 colorIndex) private {
+    function buyPixel(uint256 pixelIndex, uint8 colorIndex) private {
         // Set seller and cost with condition for if this is the first time this pixel is sold
-        
-        uint256 pixelIndex = pixelLocationToIndex[pixelLocation];
-        // Pixel memory pixel = pixels[pixelIndex];
+        Pixel memory pixel = pixels[pixelIndex];
+
         address pixelSeller;
-        uint256 cost;
-        if (ownerOf[pixelLocation] == address(0)) {
+        if (ownerOf[pixelIndex] == address(0)) {
             pixelSeller = owner;
-            cost = INITIAL_PIXEL_PRICE;
         } else {
-            pixelSeller = ownerOf[pixelLocation];
-            cost = pixels[pixelIndex].cost;
+            pixelSeller = ownerOf[pixelIndex];
+            
         }
         ColorChoice color = ColorChoice(colorIndex);
         // Set ownership to buyer, update pixel balance of seller and buyer
-        ownerOf[pixelLocation] = msg.sender;
+        ownerOf[pixelIndex] = msg.sender;
         balanceOf[pixelSeller]--;
         balanceOf[msg.sender]++;
         
         // Calculate cut and add to owners pending withdrawls
-        uint256 ownerCut = cost * (OWNER_CUT / 10000);
+        uint256 ownerCut = pixel.cost * (OWNER_CUT / 10000);
         pendingWithdrawals[owner] += ownerCut;
         // Add sale proceeds to seller's account for withdrawal
-        pendingWithdrawals[pixelSeller] += (cost - ownerCut);
-        // Create pixel with new price and new color
-        Pixel memory pixel = Pixel(pixelLocation, (cost * (COST_MULTIPLIER / 10)) + cost, color);
-        if (ownerOf[pixelLocation] == address(0)) {
-            pixels.push(pixel);
-            pixelLocationToIndex[pixelLocation] = pixels.length - 1;
-        } else {
-            pixels[pixelIndex] = pixel;
-        }
-        Transfer(pixelSeller, msg.sender, pixelLocation);
-        Purchase(pixelLocation, msg.value, pixelSeller, msg.sender);
-        Update(pixelLocation, pixels[pixelIndex].cost, color);
+        pendingWithdrawals[pixelSeller] += (pixel.cost - ownerCut);
+        // Update pixel with new price and new color
+        pixels[pixelIndex] = Pixel((pixel.cost * (COST_MULTIPLIER / 10)) + pixel.cost, color);
+        Transfer(pixelSeller, msg.sender, pixelIndex);
+        Purchase(pixelIndex, msg.value, pixelSeller, msg.sender);
+        Update(pixelIndex, pixels[pixelIndex].cost, color);
     }
     /* Function for pixel seller to update price (only price reductions are allowed) */
-    function updatePixel(uint pixelLocation, uint price) public postInit validLocation(pixelLocation) sellerOnly(pixelLocation) {
-        uint256 pixelIndex = pixelLocationToIndex[pixelLocation];
+    function updatePixel(uint pixelIndex, uint price) public postInit validIndex(pixelIndex) sellerOnly(pixelIndex) {
         require(price < pixels[pixelIndex].cost);
 
         pixels[pixelIndex].cost = price;
-        Update(pixelLocation, pixels[pixelIndex].cost, pixels[pixelIndex].color);
+        Update(pixelIndex, pixels[pixelIndex].cost, pixels[pixelIndex].color);
     }
     /* Function for pixel seller to update pixel color */
-    function updatePixel(uint pixelLocation, uint8 colorIndex) public postInit validLocation(pixelLocation) validColor(colorIndex) sellerOnly(pixelLocation) {
-        uint256 pixelIndex = pixelLocationToIndex[pixelLocation];
+    function updatePixel(uint pixelIndex, uint8 colorIndex) public postInit validIndex(pixelIndex) validColor(colorIndex) sellerOnly(pixelIndex) {
         require(colorIndex != uint8(pixels[pixelIndex].color));
         pixels[pixelIndex].color = ColorChoice(colorIndex);
-        Update(pixelLocation, pixels[pixelIndex].cost, pixels[pixelIndex].color);
+        Update(pixelIndex, pixels[pixelIndex].cost, pixels[pixelIndex].color);
     }
     /* Function for pixel seller to update pixel price and color */
-    function updatePixel(uint pixelLocation, uint8 colorIndex, uint price) public postInit validLocation(pixelLocation) validColor(colorIndex) sellerOnly(pixelLocation) {
-        uint256 pixelIndex = pixelLocationToIndex[pixelLocation];
+    function updatePixel(uint pixelIndex, uint8 colorIndex, uint price) public postInit validIndex(pixelIndex) validColor(colorIndex) sellerOnly(pixelIndex) {
         require(colorIndex != uint8(pixels[pixelIndex].color));
         require(price < pixels[pixelIndex].cost);
 
         pixels[pixelIndex].color = ColorChoice(colorIndex);
         pixels[pixelIndex].cost = price;
-        Update(pixelLocation, pixels[pixelIndex].cost, pixels[pixelIndex].color);
+        Update(pixelIndex, pixels[pixelIndex].cost, pixels[pixelIndex].color);
     }
     function withdraw() public postInit {
         uint256 amount = pendingWithdrawals[msg.sender];
